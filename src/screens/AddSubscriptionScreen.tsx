@@ -1,18 +1,21 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, StyleSheet, TextInput, TouchableOpacity, ScrollView, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useApp } from '../context/AppContext';
-import { addSubscription } from '../services/database';
-import { scheduleBillReminder } from '../services/notifications';
+import { useTheme } from '../context/ThemeContext';
+import { addSubscription, updateSubscription } from '../services/database';
+import { scheduleSubscriptionReminder, cancelSubscriptionReminder } from '../services/notifications';
 import { Subscription } from '../types';
 
 interface AddSubscriptionScreenProps {
   onSave: () => void;
   onCancel: () => void;
+  subscription?: Subscription; // Optional subscription for editing
 }
 
-const AddSubscriptionScreen: React.FC<AddSubscriptionScreenProps> = ({ onSave, onCancel }) => {
+const AddSubscriptionScreen: React.FC<AddSubscriptionScreenProps> = ({ onSave, onCancel, subscription }) => {
   const { state, dispatch } = useApp();
+  const theme = useTheme();
   const [formData, setFormData] = useState({
     name: '',
     provider: '',
@@ -26,6 +29,25 @@ const AddSubscriptionScreen: React.FC<AddSubscriptionScreenProps> = ({ onSave, o
     reminderTime: 1,
     description: '',
   });
+
+  // Pre-fill form data when editing
+  useEffect(() => {
+    if (subscription) {
+      setFormData({
+        name: subscription.name,
+        provider: subscription.provider || '',
+        category: subscription.category,
+        amount: subscription.amount.toString(),
+        currency: subscription.currency,
+        billingCycle: subscription.billingCycle,
+        isAutoPayEnabled: subscription.isAutoPayEnabled,
+        nextBillingDate: subscription.nextBillingDate || '',
+        renewalDate: subscription.nextBillingDate || subscription.expiryDate || '',
+        reminderTime: subscription.reminderTime,
+        description: subscription.description || '',
+      });
+    }
+  }, [subscription]);
 
   const handleSave = async () => {
     if (!formData.name.trim() || !formData.amount) {
@@ -45,31 +67,13 @@ const AddSubscriptionScreen: React.FC<AddSubscriptionScreenProps> = ({ onSave, o
       return;
     }
 
-    // For auto-pay, calculate next billing date based on billing cycle
-    let nextBillingDate = formData.nextBillingDate;
-    let expiryDate = formData.renewalDate;
+    // Use only the dates provided by the user
+    let nextBillingDate = formData.renewalDate; // For auto-pay, use renewal date as next billing date
+    let expiryDate = formData.renewalDate; // For manual, use renewal date as expiry date
 
     if (formData.isAutoPayEnabled) {
-      // Calculate next billing date based on billing cycle
-      const today = new Date();
-      let nextDate = new Date(today);
-      
-      switch (formData.billingCycle) {
-        case 'weekly':
-          nextDate.setDate(today.getDate() + 7);
-          break;
-        case 'monthly':
-          nextDate.setMonth(today.getMonth() + 1);
-          break;
-        case 'quarterly':
-          nextDate.setMonth(today.getMonth() + 3);
-          break;
-        case 'yearly':
-          nextDate.setFullYear(today.getFullYear() + 1);
-          break;
-      }
-      
-      nextBillingDate = nextDate.toISOString().split('T')[0];
+      // For auto-pay, use provided renewal date as next billing date (or empty if not provided)
+      nextBillingDate = formData.renewalDate;
       expiryDate = ''; // No expiry date for auto-pay
     } else {
       // For manual, use provided renewal date as expiry date
@@ -78,7 +82,7 @@ const AddSubscriptionScreen: React.FC<AddSubscriptionScreenProps> = ({ onSave, o
     }
 
     try {
-      const subscription: Omit<Subscription, 'id' | 'createdAt' | 'updatedAt'> = {
+      const subscriptionData: Omit<Subscription, 'id' | 'createdAt' | 'updatedAt'> = {
         name: formData.name.trim(),
         provider: formData.provider.trim() || undefined,
         category: formData.category,
@@ -93,41 +97,48 @@ const AddSubscriptionScreen: React.FC<AddSubscriptionScreenProps> = ({ onSave, o
         description: formData.description.trim() || undefined,
       };
 
-      const subscriptionId = await addSubscription(subscription);
-      
-      // Schedule notification only for manual subscriptions
-      if (!formData.isAutoPayEnabled) {
-        const newSubscription: Subscription = {
-          ...subscription,
+      if (subscription) {
+        // Update existing subscription
+        const updatedSubscription: Subscription = {
+          ...subscriptionData,
+          id: subscription.id,
+          createdAt: subscription.createdAt,
+          updatedAt: new Date().toISOString(),
+        };
+
+        await updateSubscription(subscription.id, subscriptionData);
+        
+        // Cancel old notification and schedule new one if needed
+        await cancelSubscriptionReminder(subscription.id);
+        if (!formData.isAutoPayEnabled) {
+          await scheduleSubscriptionReminder(updatedSubscription);
+        }
+        
+        dispatch({ type: 'UPDATE_SUBSCRIPTION', payload: updatedSubscription });
+      } else {
+        // Add new subscription
+        const subscriptionId = await addSubscription(subscriptionData);
+        
+        // Schedule notification only for manual subscriptions
+        if (!formData.isAutoPayEnabled) {
+          const newSubscription: Subscription = {
+            ...subscriptionData,
+            id: subscriptionId,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          };
+          
+          await scheduleSubscriptionReminder(newSubscription);
+        }
+        
+        dispatch({ type: 'ADD_SUBSCRIPTION', payload: {
+          ...subscriptionData,
           id: subscriptionId,
           createdAt: new Date().toISOString(),
           updatedAt: new Date().toISOString(),
-        };
-        
-        // Convert to bill format for notification service
-        const bill = {
-          id: newSubscription.id,
-          name: newSubscription.name,
-          category: 'subscription' as const,
-          amount: newSubscription.amount,
-          dueDate: newSubscription.expiryDate,
-          frequency: newSubscription.billingCycle === 'monthly' ? 'monthly' as const : 
-                     newSubscription.billingCycle === 'yearly' ? 'yearly' as const : 'custom' as const,
-          reminderTime: newSubscription.reminderTime,
-          isPaid: false,
-          createdAt: newSubscription.createdAt,
-          updatedAt: newSubscription.updatedAt,
-        };
-        
-        await scheduleBillReminder(bill);
+        }});
       }
       
-      dispatch({ type: 'ADD_SUBSCRIPTION', payload: {
-        ...subscription,
-        id: subscriptionId,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }});
       onSave();
     } catch (error) {
       Alert.alert('Error', 'Failed to save subscription');
@@ -143,51 +154,54 @@ const AddSubscriptionScreen: React.FC<AddSubscriptionScreenProps> = ({ onSave, o
     { key: 'other', label: 'Other', icon: '📱' },
   ];
 
-  const currencies = ['INR', 'USD', 'EUR', 'GBP', 'JPY'];
+  const styles = createStyles(theme);
 
   return (
-    <SafeAreaView style={styles.container}>
-      <View style={styles.header}>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      <View style={[styles.header, { backgroundColor: theme.colors.surface, borderBottomColor: theme.colors.border }]}>
         <TouchableOpacity onPress={onCancel}>
-          <Text style={styles.cancelButton}>Cancel</Text>
+          <Text style={[styles.cancelButton, { color: theme.colors.textSecondary }]}>Cancel</Text>
         </TouchableOpacity>
-        <Text style={styles.title}>Add Subscription</Text>
+        <Text style={[styles.title, { color: theme.colors.text }]}>{subscription ? 'Edit Subscription' : 'Add Subscription'}</Text>
         <TouchableOpacity onPress={handleSave}>
-          <Text style={styles.saveButton}>Save</Text>
+          <Text style={[styles.saveButton, { color: theme.colors.primary }]}>Save</Text>
         </TouchableOpacity>
       </View>
 
       <ScrollView style={styles.content}>
         <View style={styles.form}>
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Service Name *</Text>
+            <Text style={[styles.label, { color: theme.colors.text }]}>Service Name *</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border, color: theme.colors.text }]}
               placeholder="e.g., Netflix, Spotify, Adobe Creative Cloud"
+              placeholderTextColor={theme.colors.textSecondary}
               value={formData.name}
               onChangeText={(text) => setFormData({ ...formData, name: text })}
             />
           </View>
 
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Provider (Optional)</Text>
+            <Text style={[styles.label, { color: theme.colors.text }]}>Provider (Optional)</Text>
             <TextInput
-              style={styles.input}
+              style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border, color: theme.colors.text }]}
               placeholder="e.g., Netflix Inc., Spotify AB"
+              placeholderTextColor={theme.colors.textSecondary}
               value={formData.provider}
               onChangeText={(text) => setFormData({ ...formData, provider: text })}
             />
           </View>
 
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Category *</Text>
+            <Text style={[styles.label, { color: theme.colors.text }]}>Category *</Text>
             <View style={styles.categoryGrid}>
               {categories.map((category) => (
                 <TouchableOpacity
                   key={category.key}
                   style={[
                     styles.categoryButton,
-                    formData.category === category.key && styles.categoryButtonActive,
+                    { backgroundColor: theme.colors.surface, borderColor: theme.colors.border },
+                    formData.category === category.key && { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary },
                   ]}
                   onPress={() => setFormData({ ...formData, category: category.key as any })}
                 >
@@ -195,7 +209,8 @@ const AddSubscriptionScreen: React.FC<AddSubscriptionScreenProps> = ({ onSave, o
                   <Text
                     style={[
                       styles.categoryText,
-                      formData.category === category.key && styles.categoryTextActive,
+                      { color: theme.colors.textSecondary },
+                      formData.category === category.key && { color: 'white' },
                     ]}
                   >
                     {category.label}
@@ -206,58 +221,43 @@ const AddSubscriptionScreen: React.FC<AddSubscriptionScreenProps> = ({ onSave, o
           </View>
 
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Amount & Currency *</Text>
+            <Text style={[styles.label, { color: theme.colors.text }]}>Amount & Currency *</Text>
             <View style={styles.amountRow}>
               <TextInput
-                style={[styles.input, styles.amountInput]}
+                style={[styles.input, styles.amountInput, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border, color: theme.colors.text }]}
                 placeholder="0.00"
+                placeholderTextColor={theme.colors.textSecondary}
                 value={formData.amount}
                 onChangeText={(text) => setFormData({ ...formData, amount: text })}
                 keyboardType="numeric"
               />
               <View style={styles.currencyContainer}>
-                <Text style={styles.currencyLabel}>Currency:</Text>
-                <View style={styles.currencyButtons}>
-                  {currencies.map((currency) => (
-                    <TouchableOpacity
-                      key={currency}
-                      style={[
-                        styles.currencyButton,
-                        formData.currency === currency && styles.currencyButtonActive,
-                      ]}
-                      onPress={() => setFormData({ ...formData, currency })}
-                    >
-                      <Text
-                        style={[
-                          styles.currencyButtonText,
-                          formData.currency === currency && styles.currencyButtonTextActive,
-                        ]}
-                      >
-                        {currency}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
+                <Text style={[styles.currencyLabel, { color: theme.colors.textSecondary }]}>Currency:</Text>
+                <View style={[styles.currencyDisplay, { backgroundColor: theme.colors.background, borderColor: theme.colors.border }]}>
+                  <Text style={[styles.currencyText, { color: theme.colors.textSecondary }]}>₹ INR</Text>
                 </View>
               </View>
             </View>
           </View>
 
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Billing Cycle *</Text>
+            <Text style={[styles.label, { color: theme.colors.text }]}>Billing Cycle *</Text>
             <View style={styles.billingCycleButtons}>
               {['weekly', 'monthly', 'quarterly', 'yearly'].map((cycle) => (
                 <TouchableOpacity
                   key={cycle}
                   style={[
                     styles.billingCycleButton,
-                    formData.billingCycle === cycle && styles.billingCycleButtonActive,
+                    { backgroundColor: theme.colors.surface, borderColor: theme.colors.border },
+                    formData.billingCycle === cycle && { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary },
                   ]}
                   onPress={() => setFormData({ ...formData, billingCycle: cycle as any })}
                 >
                   <Text
                     style={[
                       styles.billingCycleButtonText,
-                      formData.billingCycle === cycle && styles.billingCycleButtonTextActive,
+                      { color: theme.colors.textSecondary },
+                      formData.billingCycle === cycle && { color: 'white' },
                     ]}
                   >
                     {cycle.charAt(0).toUpperCase() + cycle.slice(1)}
@@ -268,12 +268,13 @@ const AddSubscriptionScreen: React.FC<AddSubscriptionScreenProps> = ({ onSave, o
           </View>
 
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Payment Type *</Text>
+            <Text style={[styles.label, { color: theme.colors.text }]}>Payment Type *</Text>
             <View style={styles.paymentTypeButtons}>
               <TouchableOpacity
                 style={[
                   styles.paymentTypeButton,
-                  formData.isAutoPayEnabled && styles.paymentTypeButtonActive,
+                  { backgroundColor: theme.colors.surface, borderColor: theme.colors.border },
+                  formData.isAutoPayEnabled && { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary },
                 ]}
                 onPress={() => setFormData({ ...formData, isAutoPayEnabled: true })}
               >
@@ -281,19 +282,21 @@ const AddSubscriptionScreen: React.FC<AddSubscriptionScreenProps> = ({ onSave, o
                 <Text
                   style={[
                     styles.paymentTypeText,
-                    formData.isAutoPayEnabled && styles.paymentTypeTextActive,
+                    { color: theme.colors.textSecondary },
+                    formData.isAutoPayEnabled && { color: 'white' },
                   ]}
                 >
                   Auto-pay
                 </Text>
-                <Text style={styles.paymentTypeSubtext}>
+                <Text style={[styles.paymentTypeSubtext, { color: theme.colors.textSecondary }]}>
                   Automatically renews
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[
                   styles.paymentTypeButton,
-                  !formData.isAutoPayEnabled && styles.paymentTypeButtonActive,
+                  { backgroundColor: theme.colors.surface, borderColor: theme.colors.border },
+                  !formData.isAutoPayEnabled && { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary },
                 ]}
                 onPress={() => setFormData({ ...formData, isAutoPayEnabled: false })}
               >
@@ -301,50 +304,57 @@ const AddSubscriptionScreen: React.FC<AddSubscriptionScreenProps> = ({ onSave, o
                 <Text
                   style={[
                     styles.paymentTypeText,
-                    !formData.isAutoPayEnabled && styles.paymentTypeTextActive,
+                    { color: theme.colors.textSecondary },
+                    !formData.isAutoPayEnabled && { color: 'white' },
                   ]}
                 >
                   Manual
                 </Text>
-                <Text style={styles.paymentTypeSubtext}>
+                <Text style={[styles.paymentTypeSubtext, { color: theme.colors.textSecondary }]}>
                   Expires and needs renewal
                 </Text>
               </TouchableOpacity>
             </View>
           </View>
 
-          {!formData.isAutoPayEnabled && (
-            <View style={styles.inputGroup}>
-              <Text style={styles.label}>Renewal Date *</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="YYYY-MM-DD"
-                value={formData.renewalDate}
-                onChangeText={(text) => setFormData({ ...formData, renewalDate: text })}
-              />
-              <Text style={styles.helpText}>
-                When this subscription needs to be renewed manually
-              </Text>
-            </View>
-          )}
+          <View style={styles.inputGroup}>
+            <Text style={[styles.label, { color: theme.colors.text }]}>
+              {formData.isAutoPayEnabled ? 'Next Billing Date (Optional)' : 'Renewal Date *'}
+            </Text>
+            <TextInput
+              style={[styles.input, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border, color: theme.colors.text }]}
+              placeholder="YYYY-MM-DD"
+              placeholderTextColor={theme.colors.textSecondary}
+              value={formData.renewalDate}
+              onChangeText={(text) => setFormData({ ...formData, renewalDate: text })}
+            />
+            <Text style={[styles.helpText, { color: theme.colors.textSecondary }]}>
+              {formData.isAutoPayEnabled 
+                ? 'Leave empty if you don\'t know the exact billing date'
+                : 'When this subscription needs to be renewed manually'
+              }
+            </Text>
+          </View>
 
           {!formData.isAutoPayEnabled && (
             <View style={styles.inputGroup}>
-              <Text style={styles.label}>Reminder Time</Text>
+              <Text style={[styles.label, { color: theme.colors.text }]}>Reminder Time</Text>
               <View style={styles.reminderButtons}>
                 {[1, 3, 7].map((days) => (
                   <TouchableOpacity
                     key={days}
                     style={[
                       styles.reminderButton,
-                      formData.reminderTime === days && styles.reminderButtonActive,
+                      { backgroundColor: theme.colors.surface, borderColor: theme.colors.border },
+                      formData.reminderTime === days && { backgroundColor: theme.colors.primary, borderColor: theme.colors.primary },
                     ]}
                     onPress={() => setFormData({ ...formData, reminderTime: days })}
                   >
                     <Text
                       style={[
                         styles.reminderButtonText,
-                        formData.reminderTime === days && styles.reminderButtonTextActive,
+                        { color: theme.colors.textSecondary },
+                        formData.reminderTime === days && { color: 'white' },
                       ]}
                     >
                       {days} day{days > 1 ? 's' : ''} before
@@ -356,10 +366,11 @@ const AddSubscriptionScreen: React.FC<AddSubscriptionScreenProps> = ({ onSave, o
           )}
 
           <View style={styles.inputGroup}>
-            <Text style={styles.label}>Description (Optional)</Text>
+            <Text style={[styles.label, { color: theme.colors.text }]}>Description (Optional)</Text>
             <TextInput
-              style={[styles.input, styles.textArea]}
+              style={[styles.input, styles.textArea, { backgroundColor: theme.colors.surface, borderColor: theme.colors.border, color: theme.colors.text }]}
               placeholder="Add notes about this subscription..."
+              placeholderTextColor={theme.colors.textSecondary}
               value={formData.description}
               onChangeText={(text) => setFormData({ ...formData, description: text })}
               multiline
@@ -372,10 +383,9 @@ const AddSubscriptionScreen: React.FC<AddSubscriptionScreenProps> = ({ onSave, o
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (theme: any) => StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f5f5f5',
   },
   header: {
     flexDirection: 'row',
@@ -383,21 +393,16 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: 20,
     paddingVertical: 16,
-    backgroundColor: 'white',
     borderBottomWidth: 1,
-    borderBottomColor: '#e0e0e0',
   },
   cancelButton: {
-    color: '#666',
     fontSize: 16,
   },
   title: {
     fontSize: 18,
     fontWeight: '600',
-    color: '#333',
   },
   saveButton: {
-    color: '#2196F3',
     fontSize: 16,
     fontWeight: '600',
   },
@@ -413,17 +418,14 @@ const styles = StyleSheet.create({
   label: {
     fontSize: 16,
     fontWeight: '600',
-    color: '#333',
     marginBottom: 8,
   },
   input: {
-    backgroundColor: 'white',
     borderRadius: 12,
     paddingHorizontal: 16,
     paddingVertical: 14,
     fontSize: 16,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
   },
   textArea: {
     height: 80,
@@ -431,7 +433,6 @@ const styles = StyleSheet.create({
   },
   helpText: {
     fontSize: 12,
-    color: '#666',
     marginTop: 4,
     fontStyle: 'italic',
   },
@@ -447,32 +448,16 @@ const styles = StyleSheet.create({
   },
   currencyLabel: {
     fontSize: 14,
-    color: '#666',
     marginBottom: 8,
   },
-  currencyButtons: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 4,
-  },
-  currencyButton: {
-    paddingHorizontal: 8,
-    paddingVertical: 6,
+  currencyDisplay: {
     borderRadius: 8,
+    padding: 12,
+    alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#e0e0e0',
-    backgroundColor: 'white',
   },
-  currencyButtonActive: {
-    backgroundColor: '#2196F3',
-    borderColor: '#2196F3',
-  },
-  currencyButtonText: {
-    fontSize: 12,
-    color: '#666',
-  },
-  currencyButtonTextActive: {
-    color: 'white',
+  currencyText: {
+    fontSize: 14,
     fontWeight: '600',
   },
   categoryGrid: {
@@ -481,17 +466,11 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   categoryButton: {
-    backgroundColor: 'white',
     borderRadius: 12,
     padding: 12,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#e0e0e0',
     minWidth: 80,
-  },
-  categoryButtonActive: {
-    backgroundColor: '#2196F3',
-    borderColor: '#2196F3',
   },
   categoryIcon: {
     fontSize: 20,
@@ -499,12 +478,7 @@ const styles = StyleSheet.create({
   },
   categoryText: {
     fontSize: 12,
-    color: '#666',
     textAlign: 'center',
-  },
-  categoryTextActive: {
-    color: 'white',
-    fontWeight: '600',
   },
   billingCycleButtons: {
     flexDirection: 'row',
@@ -512,24 +486,13 @@ const styles = StyleSheet.create({
   },
   billingCycleButton: {
     flex: 1,
-    backgroundColor: 'white',
     borderRadius: 12,
     paddingVertical: 12,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#e0e0e0',
-  },
-  billingCycleButtonActive: {
-    backgroundColor: '#2196F3',
-    borderColor: '#2196F3',
   },
   billingCycleButtonText: {
     fontSize: 14,
-    color: '#666',
-  },
-  billingCycleButtonTextActive: {
-    color: 'white',
-    fontWeight: '600',
   },
   paymentTypeButtons: {
     flexDirection: 'row',
@@ -537,16 +500,10 @@ const styles = StyleSheet.create({
   },
   paymentTypeButton: {
     flex: 1,
-    backgroundColor: 'white',
     borderRadius: 12,
     padding: 16,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#e0e0e0',
-  },
-  paymentTypeButtonActive: {
-    backgroundColor: '#2196F3',
-    borderColor: '#2196F3',
   },
   paymentTypeIcon: {
     fontSize: 24,
@@ -554,16 +511,11 @@ const styles = StyleSheet.create({
   },
   paymentTypeText: {
     fontSize: 14,
-    color: '#666',
     fontWeight: '600',
     marginBottom: 4,
   },
-  paymentTypeTextActive: {
-    color: 'white',
-  },
   paymentTypeSubtext: {
     fontSize: 12,
-    color: '#999',
     textAlign: 'center',
   },
   reminderButtons: {
@@ -572,24 +524,13 @@ const styles = StyleSheet.create({
   },
   reminderButton: {
     flex: 1,
-    backgroundColor: 'white',
     borderRadius: 12,
     paddingVertical: 12,
     alignItems: 'center',
     borderWidth: 1,
-    borderColor: '#e0e0e0',
-  },
-  reminderButtonActive: {
-    backgroundColor: '#2196F3',
-    borderColor: '#2196F3',
   },
   reminderButtonText: {
     fontSize: 14,
-    color: '#666',
-  },
-  reminderButtonTextActive: {
-    color: 'white',
-    fontWeight: '600',
   },
 });
 

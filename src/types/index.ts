@@ -51,9 +51,10 @@ export type RootStackParamList = {
   Onboarding: undefined;
   Login: undefined;
   Dashboard: undefined;
-  AddSubscription: undefined;
+  AddSubscription: { subscription?: Subscription };
   SubscriptionDetail: { subscriptionId: string };
   Settings: undefined;
+  NotificationTest: undefined;
   Analytics: undefined;
 };
 

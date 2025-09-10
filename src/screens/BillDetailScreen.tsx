@@ -2,8 +2,8 @@ import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useApp } from '../context/AppContext';
-import { updateSubscription, deleteSubscription } from '../services/database';
-import { cancelBillReminder } from '../services/notifications';
+import { deleteSubscription } from '../services/database';
+import { cancelSubscriptionReminder } from '../services/notifications';
 import { formatCurrency, formatDate, getSubscriptionStatus, getBillingStatus, getStatusColor, getBillingStatusColor, getBillingCycleText } from '../utils/helpers';
 
 interface BillDetailScreenProps {
@@ -34,20 +34,10 @@ const BillDetailScreen: React.FC<BillDetailScreenProps> = ({ billId, onBack, onE
   const statusColor = getStatusColor(status);
   const billingColor = getBillingStatusColor(billingStatus);
 
-  const handleCancelSubscription = async () => {
-    try {
-      await updateSubscription(billId, { isActive: false });
-      dispatch({ type: 'UPDATE_SUBSCRIPTION', payload: { ...subscription, isActive: false } });
-      Alert.alert('Success', 'Subscription cancelled');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to cancel subscription');
-    }
-  };
-
   const handleDelete = () => {
     Alert.alert(
       'Delete Subscription',
-      'Are you sure you want to delete this subscription?',
+      'Are you sure you want to delete this subscription? This action cannot be undone.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -56,7 +46,7 @@ const BillDetailScreen: React.FC<BillDetailScreenProps> = ({ billId, onBack, onE
           onPress: async () => {
             try {
               await deleteSubscription(billId);
-              await cancelBillReminder(billId);
+              await cancelSubscriptionReminder(billId);
               dispatch({ type: 'DELETE_SUBSCRIPTION', payload: billId });
               onBack();
             } catch (error) {
@@ -102,40 +92,43 @@ const BillDetailScreen: React.FC<BillDetailScreenProps> = ({ billId, onBack, onE
             {subscription.category.charAt(0).toUpperCase() + subscription.category.slice(1)}
           </Text>
 
-          <Text style={styles.subscriptionAmount}>
-            {formatCurrency(subscription.amount, subscription.currency)}
-          </Text>
-
-          <View style={styles.detailsRow}>
-            <Text style={styles.detailLabel}>Billing Cycle:</Text>
-            <Text style={styles.detailValue}>
+          <View style={styles.amountContainer}>
+            <Text style={styles.amount}>
+              {formatCurrency(subscription.amount, subscription.currency)}
+            </Text>
+            <Text style={styles.billingCycle}>
               {getBillingCycleText(subscription.billingCycle)}
             </Text>
           </View>
 
-          <View style={styles.detailsRow}>
-            <Text style={styles.detailLabel}>Payment Type:</Text>
+          <View style={styles.billingInfo}>
             <View style={[styles.billingBadge, { backgroundColor: billingColor }]}>
               <Text style={styles.billingBadgeText}>
                 {subscription.isAutoPayEnabled ? 'Auto-pay' : 'Manual'}
               </Text>
             </View>
+            {subscription.isAutoPayEnabled ? (
+              <Text style={styles.billingDescription}>
+                Automatically renews
+              </Text>
+            ) : (
+              <Text style={styles.billingDescription}>
+                Expires and needs renewal
+              </Text>
+            )}
           </View>
 
-          <View style={styles.detailsRow}>
-            <Text style={styles.detailLabel}>{dateLabel}:</Text>
-            <Text style={styles.detailValue}>{formatDate(targetDate)}</Text>
-          </View>
-
-          <View style={styles.detailsRow}>
-            <Text style={styles.detailLabel}>Reminder:</Text>
-            <Text style={styles.detailValue}>
-              {subscription.reminderTime} day{subscription.reminderTime > 1 ? 's' : ''} before
-            </Text>
-          </View>
+          {targetDate && (
+            <View style={styles.dateContainer}>
+              <Text style={styles.dateLabel}>{dateLabel}:</Text>
+              <Text style={[styles.dateValue, { color: statusColor }]}>
+                {formatDate(targetDate)}
+              </Text>
+            </View>
+          )}
 
           {subscription.provider && (
-            <View style={styles.detailsRow}>
+            <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>Provider:</Text>
               <Text style={styles.detailValue}>{subscription.provider}</Text>
             </View>
@@ -148,12 +141,6 @@ const BillDetailScreen: React.FC<BillDetailScreenProps> = ({ billId, onBack, onE
             </View>
           )}
         </View>
-
-        {subscription.isActive && (
-          <TouchableOpacity style={styles.cancelButton} onPress={handleCancelSubscription}>
-            <Text style={styles.cancelButtonText}>Cancel Subscription</Text>
-          </TouchableOpacity>
-        )}
 
         <TouchableOpacity style={styles.deleteButton} onPress={handleDelete}>
           <Text style={styles.deleteButtonText}>Delete Subscription</Text>
@@ -179,8 +166,8 @@ const styles = StyleSheet.create({
     borderBottomColor: '#e0e0e0',
   },
   backButton: {
-    color: '#2196F3',
     fontSize: 16,
+    color: '#2196F3',
   },
   title: {
     fontSize: 18,
@@ -188,8 +175,8 @@ const styles = StyleSheet.create({
     color: '#333',
   },
   editButton: {
-    color: '#2196F3',
     fontSize: 16,
+    color: '#2196F3',
     fontWeight: '600',
   },
   content: {
@@ -250,13 +237,56 @@ const styles = StyleSheet.create({
     color: '#666',
     marginBottom: 16,
   },
-  subscriptionAmount: {
-    fontSize: 32,
-    fontWeight: 'bold',
-    color: '#2196F3',
-    marginBottom: 24,
+  amountContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
   },
-  detailsRow: {
+  amount: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  billingCycle: {
+    fontSize: 16,
+    color: '#666',
+  },
+  billingInfo: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  billingBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    marginRight: 8,
+  },
+  billingBadgeText: {
+    color: 'white',
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  billingDescription: {
+    fontSize: 14,
+    color: '#666',
+  },
+  dateContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  dateLabel: {
+    fontSize: 16,
+    color: '#666',
+  },
+  dateValue: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  detailRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
@@ -268,44 +298,22 @@ const styles = StyleSheet.create({
   },
   detailValue: {
     fontSize: 16,
-    fontWeight: '500',
     color: '#333',
-  },
-  billingBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  billingBadgeText: {
-    color: 'white',
-    fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '500',
   },
   descriptionContainer: {
     marginTop: 8,
   },
   descriptionText: {
-    fontSize: 14,
-    color: '#666',
-    marginTop: 4,
-    lineHeight: 20,
-  },
-  cancelButton: {
-    backgroundColor: '#FF9800',
-    borderRadius: 12,
-    paddingVertical: 16,
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  cancelButtonText: {
-    color: 'white',
     fontSize: 16,
-    fontWeight: '600',
+    color: '#333',
+    lineHeight: 22,
+    marginTop: 4,
   },
   deleteButton: {
     backgroundColor: '#F44336',
-    borderRadius: 12,
     paddingVertical: 16,
+    borderRadius: 12,
     alignItems: 'center',
   },
   deleteButtonText: {

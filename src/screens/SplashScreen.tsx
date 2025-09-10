@@ -1,59 +1,96 @@
-import React, { useEffect } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator } from 'react-native';
-import { useApp } from '../context/AppContext';
-import { initDatabase } from '../services/database';
+import React from 'react';
+import { View, Text, StyleSheet, ActivityIndicator, Image } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useTheme } from '../context/ThemeContext';
 
 const SplashScreen: React.FC = () => {
-  const { dispatch } = useApp();
-
-  useEffect(() => {
-    initializeApp();
-  }, []);
-
-  const initializeApp = async () => {
-    try {
-      // Initialize database
-      await initDatabase();
-      
-      // Simulate loading time
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      dispatch({ type: 'SET_LOADING', payload: false });
-    } catch (error) {
-      console.error('Error initializing app:', error);
-      dispatch({ type: 'SET_LOADING', payload: false });
-    }
-  };
+  const theme = useTheme();
+  const styles = createStyles(theme);
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>💰 BillTracker</Text>
-      <Text style={styles.subtitle}>Never miss a payment again</Text>
-      <ActivityIndicator size="large" color="#2196F3" style={styles.loader} />
-    </View>
+    <SafeAreaView style={[styles.container, { backgroundColor: theme.colors.background }]}>
+      <View style={styles.content}>
+        {/* App Logo/Icon */}
+        <View style={[styles.logoContainer, { backgroundColor: theme.colors.primary }]}>
+          <Text style={styles.logoText}>📱</Text>
+        </View>
+        
+        {/* App Title */}
+        <Text style={[styles.title, { color: theme.colors.text }]}>Subscription Tracker</Text>
+        <Text style={[styles.subtitle, { color: theme.colors.textSecondary }]}>
+          Manage your subscriptions with ease
+        </Text>
+        
+        {/* Loading Indicator */}
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={theme.colors.primary} />
+          <Text style={[styles.loadingText, { color: theme.colors.textSecondary }]}>
+            Loading...
+          </Text>
+        </View>
+        
+        {/* App Version */}
+        <Text style={[styles.version, { color: theme.colors.textSecondary }]}>
+          v1.0.0
+        </Text>
+      </View>
+    </SafeAreaView>
   );
 };
 
-const styles = StyleSheet.create({
+const createStyles = (theme: any) => StyleSheet.create({
   container: {
+    flex: 1,
+  },
+  content: {
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#f5f5f5',
+    paddingHorizontal: 40,
+  },
+  logoContainer: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 32,
+    shadowColor: '#000',
+    shadowOffset: {
+      width: 0,
+      height: 4,
+    },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 8,
+  },
+  logoText: {
+    fontSize: 48,
   },
   title: {
     fontSize: 32,
     fontWeight: 'bold',
-    color: '#2196F3',
     marginBottom: 8,
+    textAlign: 'center',
   },
   subtitle: {
     fontSize: 16,
-    color: '#666',
-    marginBottom: 40,
+    marginBottom: 48,
+    textAlign: 'center',
+    lineHeight: 22,
   },
-  loader: {
-    marginTop: 20,
+  loadingContainer: {
+    alignItems: 'center',
+    marginBottom: 32,
+  },
+  loadingText: {
+    fontSize: 14,
+    marginTop: 12,
+  },
+  version: {
+    fontSize: 12,
+    position: 'absolute',
+    bottom: 40,
   },
 });
 

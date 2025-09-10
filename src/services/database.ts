@@ -144,10 +144,6 @@ export const deleteSubscription = (id: string) => {
   });
 };
 
-export const cancelSubscription = (id: string) => {
-  return updateSubscription(id, { isActive: false });
-};
-
 export const getUser = (): Promise<User | null> => {
   return new Promise((resolve, reject) => {
     try {
@@ -171,6 +167,22 @@ export const saveUser = (user: User) => {
          VALUES (?, ?, ?, ?, ?, ?)`,
         [user.id, user.name, user.email, user.defaultReminderTime, user.theme, user.currency]
       );
+      resolve();
+    } catch (error) {
+      reject(error);
+    }
+  });
+};
+
+export const clearAllData = () => {
+  return new Promise<void>((resolve, reject) => {
+    try {
+      // Clear all subscriptions
+      db.runSync('DELETE FROM subscriptions');
+      
+      // Clear all users
+      db.runSync('DELETE FROM users');
+      
       resolve();
     } catch (error) {
       reject(error);

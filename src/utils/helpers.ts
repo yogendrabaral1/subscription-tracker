@@ -7,6 +7,9 @@ export const formatCurrency = (amount: number, currency: string = 'INR'): string
     GBP: '£',
     INR: '₹',
     JPY: '¥',
+    CAD: 'C$',
+    AUD: 'A$',
+    CHF: 'CHF',
   };
   
   const symbol = symbols[currency] || '₹';
@@ -28,70 +31,11 @@ export const formatCurrency = (amount: number, currency: string = 'INR'): string
 
 export const formatDate = (dateString: string): string => {
   const date = new Date(dateString);
-  return date.toLocaleDateString('en-IN', {
-    day: 'numeric',
-    month: 'short',
+  return date.toLocaleDateString('en-US', {
     year: 'numeric',
+    month: 'short',
+    day: 'numeric',
   });
-};
-
-export const getSubscriptionStatus = (subscription: Subscription): SubscriptionStatus => {
-  if (!subscription.isActive) return 'cancelled';
-  
-  const now = new Date();
-  const targetDate = subscription.isAutoPayEnabled 
-    ? new Date(subscription.nextBillingDate)
-    : new Date(subscription.expiryDate);
-  
-  const diffTime = targetDate.getTime() - now.getTime();
-  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-  
-  if (diffDays < 0) return 'expired';
-  if (diffDays <= 7) return 'expiring-soon';
-  return 'active';
-};
-
-export const getBillingStatus = (subscription: Subscription): BillingStatus => {
-  if (!subscription.isActive) return 'expired';
-  if (subscription.isAutoPayEnabled) return 'auto-pay';
-  return 'manual';
-};
-
-export const getStatusColor = (status: SubscriptionStatus): string => {
-  switch (status) {
-    case 'active':
-      return '#4CAF50'; // Green
-    case 'expiring-soon':
-      return '#FF9800'; // Orange
-    case 'expired':
-      return '#F44336'; // Red
-    case 'cancelled':
-      return '#9E9E9E'; // Gray
-    default:
-      return '#757575';
-  }
-};
-
-export const getBillingStatusColor = (status: BillingStatus): string => {
-  switch (status) {
-    case 'auto-pay':
-      return '#2196F3'; // Blue
-    case 'manual':
-      return '#FF9800'; // Orange
-    case 'expired':
-      return '#F44336'; // Red
-    default:
-      return '#757575';
-  }
-};
-
-export const getDaysUntilNextBilling = (subscription: Subscription): number => {
-  const targetDate = subscription.isAutoPayEnabled 
-    ? new Date(subscription.nextBillingDate)
-    : new Date(subscription.expiryDate);
-  const now = new Date();
-  const diffTime = targetDate.getTime() - now.getTime();
-  return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 };
 
 export const calculateMonthlySpending = (subscriptions: Subscription[]): number => {
@@ -100,7 +44,6 @@ export const calculateMonthlySpending = (subscriptions: Subscription[]): number 
     .reduce((total, sub) => {
       let monthlyAmount = sub.amount;
       
-      // Convert to monthly amount based on billing cycle
       switch (sub.billingCycle) {
         case 'weekly':
           monthlyAmount = sub.amount * 4.33; // Average weeks per month
@@ -126,7 +69,6 @@ export const calculateYearlySpending = (subscriptions: Subscription[]): number =
     .reduce((total, sub) => {
       let yearlyAmount = sub.amount;
       
-      // Convert to yearly amount based on billing cycle
       switch (sub.billingCycle) {
         case 'weekly':
           yearlyAmount = sub.amount * 52;
@@ -146,80 +88,164 @@ export const calculateYearlySpending = (subscriptions: Subscription[]): number =
     }, 0);
 };
 
-export const getUpcomingRenewals = (subscriptions: Subscription[], days: number = 30): Subscription[] => {
+export const getUpcomingRenewals = (subscriptions: Subscription[]): Subscription[] => {
   const now = new Date();
-  const futureDate = new Date(now.getTime() + (days * 24 * 60 * 60 * 1000));
+  const next30Days = new Date(now.getTime() + 30 * 24 * 60 * 60 * 1000);
   
   return subscriptions
     .filter(sub => {
-      if (!sub.isActive || !sub.isAutoPayEnabled) return false;
+      if (!sub.isActive) return false;
       
-      const nextBilling = new Date(sub.nextBillingDate);
-      return nextBilling >= now && nextBilling <= futureDate;
+      const targetDate = sub.isAutoPayEnabled ? sub.nextBillingDate : sub.expiryDate;
+      if (!targetDate) return false;
+      
+      const date = new Date(targetDate);
+      return date >= now && date <= next30Days;
     })
-    .sort((a, b) => new Date(a.nextBillingDate).getTime() - new Date(b.nextBillingDate).getTime());
+    .sort((a, b) => {
+      const dateA = new Date(a.isAutoPayEnabled ? a.nextBillingDate! : a.expiryDate!);
+      const dateB = new Date(b.isAutoPayEnabled ? b.nextBillingDate! : b.expiryDate!);
+      return dateA.getTime() - dateB.getTime();
+    });
 };
 
-export const getExpiringSoon = (subscriptions: Subscription[], days: number = 30): Subscription[] => {
+export const getExpiringSoon = (subscriptions: Subscription[]): Subscription[] => {
   const now = new Date();
-  const futureDate = new Date(now.getTime() + (days * 24 * 60 * 60 * 1000));
+  const next7Days = new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000);
   
   return subscriptions
     .filter(sub => {
       if (!sub.isActive || sub.isAutoPayEnabled) return false;
       
-      const expiryDate = new Date(sub.expiryDate);
-      return expiryDate >= now && expiryDate <= futureDate;
+      if (!sub.expiryDate) return false;
+      
+      const date = new Date(sub.expiryDate);
+      return date >= now && date <= next7Days;
     })
-    .sort((a, b) => new Date(a.expiryDate).getTime() - new Date(b.expiryDate).getTime());
+    .sort((a, b) => {
+      const dateA = new Date(a.expiryDate!);
+      const dateB = new Date(b.expiryDate!);
+      return dateA.getTime() - dateB.getTime();
+    });
+};
+
+const getCategoryColor = (category: string): string => {
+  const colors = [
+    '#2196F3', '#4CAF50', '#FF9800', '#F44336', '#9C27B0', '#00BCD4',
+    '#8BC34A', '#FFC107', '#795548', '#607D8B', '#E91E63', '#3F51B5'
+  ];
+  
+  let hash = 0;
+  for (let i = 0; i < category.length; i++) {
+    hash = category.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  
+  return colors[Math.abs(hash) % colors.length];
 };
 
 export const getCategoryBreakdown = (subscriptions: Subscription[]): CategoryBreakdown[] => {
-  const categoryColors: { [key: string]: string } = {
-    entertainment: '#E91E63',
-    productivity: '#2196F3',
-    fitness: '#4CAF50',
-    news: '#FF9800',
-    cloud: '#9C27B0',
-    other: '#607D8B',
-  };
-
-  const breakdown: { [key: string]: { amount: number; count: number } } = {};
+  const categoryMap = new Map<string, { amount: number; count: number }>();
   
   subscriptions
     .filter(sub => sub.isActive)
     .forEach(sub => {
-      const monthlyAmount = getMonthlyAmount(sub);
-      
-      if (!breakdown[sub.category]) {
-        breakdown[sub.category] = { amount: 0, count: 0 };
-      }
-      
-      breakdown[sub.category].amount += monthlyAmount;
-      breakdown[sub.category].count += 1;
+      const monthlyAmount = calculateMonthlySpending([sub]);
+      const existing = categoryMap.get(sub.category) || { amount: 0, count: 0 };
+      categoryMap.set(sub.category, {
+        amount: existing.amount + monthlyAmount,
+        count: existing.count + 1,
+      });
     });
-
-  return Object.entries(breakdown).map(([category, data]) => ({
-    category: category.charAt(0).toUpperCase() + category.slice(1),
-    amount: data.amount,
-    count: data.count,
-    color: categoryColors[category] || '#607D8B',
-  }));
+  
+  return Array.from(categoryMap.entries())
+    .map(([category, data]) => ({
+      category: category.charAt(0).toUpperCase() + category.slice(1),
+      amount: data.amount,
+      count: data.count,
+      color: getCategoryColor(category),
+    }))
+    .sort((a, b) => b.amount - a.amount);
 };
 
-const getMonthlyAmount = (subscription: Subscription): number => {
-  switch (subscription.billingCycle) {
-    case 'weekly':
-      return subscription.amount * 4.33;
-    case 'monthly':
-      return subscription.amount;
-    case 'quarterly':
-      return subscription.amount / 3;
-    case 'yearly':
-      return subscription.amount / 12;
-    default:
-      return subscription.amount;
+export const getSubscriptionStatus = (subscription: Subscription): SubscriptionStatus => {
+  if (!subscription.isActive) {
+    return 'cancelled';
   }
+  
+  if (subscription.isAutoPayEnabled) {
+    return 'active';
+  }
+  
+  if (!subscription.expiryDate) {
+    return 'active';
+  }
+  
+  const now = new Date();
+  const expiryDate = new Date(subscription.expiryDate);
+  const daysUntilExpiry = Math.ceil((expiryDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+  
+  if (daysUntilExpiry < 0) {
+    return 'expired';
+  } else if (daysUntilExpiry <= 7) {
+    return 'expiring-soon';
+  } else {
+    return 'active';
+  }
+};
+
+export const getBillingStatus = (subscription: Subscription): BillingStatus => {
+  if (!subscription.isActive) {
+    return 'expired';
+  }
+  
+  if (subscription.isAutoPayEnabled) {
+    return 'auto-pay';
+  } else {
+    return 'manual';
+  }
+};
+
+export const getStatusColor = (status: SubscriptionStatus): string => {
+  switch (status) {
+    case 'active':
+      return '#4CAF50';
+    case 'expiring-soon':
+      return '#FF9800';
+    case 'expired':
+      return '#F44336';
+    case 'cancelled':
+      return '#9E9E9E';
+    default:
+      return '#2196F3';
+  }
+};
+
+export const getBillingStatusColor = (status: BillingStatus): string => {
+  switch (status) {
+    case 'auto-pay':
+      return '#4CAF50';
+    case 'manual':
+      return '#FF9800';
+    case 'expired':
+      return '#9E9E9E';
+    default:
+      return '#2196F3';
+  }
+};
+
+export const getDaysUntilNextBilling = (subscription: Subscription): number => {
+  const targetDate = subscription.isAutoPayEnabled ? subscription.nextBillingDate : subscription.expiryDate;
+  
+  if (!targetDate) {
+    return -1;
+  }
+  
+  const now = new Date();
+  const date = new Date(targetDate);
+  const diffTime = date.getTime() - now.getTime();
+  const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+  
+  return diffDays;
 };
 
 export const getBillingCycleText = (cycle: string): string => {
